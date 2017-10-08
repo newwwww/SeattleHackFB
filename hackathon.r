@@ -1,8 +1,7 @@
-#----------------------------------
-#Purpose:
-#Read SAS stream from Cosmos 
-#Perform NLP parsing of verbatim
-#----------------------------------
+#----------------------------------------------------
+#Purpose: Predict Seattle Street Parking Availability
+#using publicly available data set from Seattle Date Portal
+#-----------------------------------------------------
 
 setwd("~/R/Hackathon")
 library(tcltk)
@@ -19,26 +18,18 @@ library(dplyr)
 library(tidyr)
 library(caTools)
 
-#----------------------------------
-#Raw Data
-#----------------------------------
-
+#read local data set
 df<- read.table("data.txt", header = TRUE, sep="\t", quote = "", stringsAsFactors=FALSE)
 str(df)
 
 #define features for modeling
 features <- c("TotalParkingSpaces", "Long",  "Lat", "HourlyRate" ,"AirTemperature", "Time", "Weekday")
 
-#Create  dataset for training and testing
-data <- df[,colnames(df) %in% c(features, "AvailableSpaces")]
+#select features and remove missing data
+data <- data[,colnames(data) %in% c( "AvailableSpaces", features)]
 data <- na.omit(data)
-str(data)
 data$Weekday <- as.factor(data$Weekday)
 data$Time <- as.factor(data$Time)
-
-#select features and remove missing data
-data <- data[,colnames(data) %in% c(features, "AvailableSpaces")]
-data <- na.omit(data)
 
 #Split into train and test 
 sample <- sample.split(data$AvailableSpaces, SplitRatio = 0.70)
@@ -62,12 +53,12 @@ demo <- unique(rbind(demo1,demo2,demo3,demo4))
 
 demo$Weekday <- as.factor(demo$Weekday)
 demo$Time <- as.factor(demo$Time)
-demo <- demo[,colnames(demo) %in% c(features, "AvailableSpaces")]
+demo <- demo[,colnames(demo) %in% c( "AvailableSpaces", features)]
 demo <- na.omit(demo)
 str(demo)
 
 
-#All data for cross validation
+#all data matrix for cross validation
 sparse_matrix.data <- sparse.model.matrix(AvailableSpaces~.-1, data = data)
 data.label = df$AvailableSpaces
 
@@ -85,7 +76,7 @@ demo.label = demo$AvailableSpaces
 
 #xgboost model train
 bst <-xgboost(data = sparse_matrix.train, label = train.label,  objective = "reg:linear", eval_metric="rmse",
-              nrounds = 300, max_depth = 6, eta = 0.6, gamma = 0)
+              nrounds = 1385, max_depth = 6, eta = 0.6, gamma = 0)
 #, colsample_bytree = 9 , min_child_weight = 4, subsample = 0.75 )
 
 saveRDS(bst,  "parking.xgboost.Model.RDS")
@@ -101,15 +92,9 @@ demo.bst$prediction <- predict(bst, sparse_matrix.demo)
 demo.bst$prediction
 
 
-
-
-
-
-
-
-
-
-#========Cross validation & grid search. =============#
+#===============================
+#Cross validation  
+#===============================
 #Fix eta = 0.1, use xgboost cross validation to find nrounds, use default for all other parameters
 xgb_params = list(
   objective = "reg:linear",
@@ -121,7 +106,7 @@ xgb_cv = xgb.cv(params = xgb_params,
                 data = sparse_matrix.data,
                 label =  data.label,
                 nfold = 10,           
-                nrounds = 1000,  
+                nrounds = 1385,  
                 prediction = TRUE,    # return the prediction using the final model 
                 showsd = TRUE,        # standard deviation of loss across folds
                 #stratified = TRUE,   # sample is unbalanced; use stratified sampling
@@ -129,62 +114,29 @@ xgb_cv = xgb.cv(params = xgb_params,
                 print_every_n = 1, 
                 early_stopping_rounds = 10)
 
-
-#perform cross validation using caret package
+#======================================
+#Perform grid search using caret package  
+#======================================
 ControlParamteres <- trainControl(method = "cv",
                                   number = 10,
                                   #verboseIter = TRUE,
                                   savePredictions = TRUE,
                                   classProbs = TRUE,
-                                  # summaryFunction = twoClassSummary,
                                   allowParallel = TRUE
 )
 
 parametersGrid <-  expand.grid(
   nrounds=664,
   max_depth=c(3,6), 
-  eta = c(0.1, 0.05, 0.01, 0.001),
+  eta = c(0.2, 0.1, 0.05, 0.01, 0.001),
   gamma=0,
-  #colsample_bytree = c(0.6, 0.7, 0.8, 0,9),
+  colsample_bytree = c(0.6, 0.7, 0.8, 0,9),
   min_child_weight = c(1, 2, 3, 4),
   subsample = c(0.5, 0.75, 1)
 )
 
-parametersGrid
-
 modelxgboost <- train(AvailableSpaces~., 
-                      data = df,
+                      data = sparse_matrix.data,
                       method = "xgbTree",
                       trControl = ControlParamteres,
                       tuneGrid=parametersGrid)
-
-modelxgboost
-
-#Selecting tuning parameters
-
-#The final values used for the model were nrounds = 32, max_depth = 3, eta = 0.1, gamma = 0, colsample_bytree =
-#9, min_child_weight = 4 and subsample = 0.75. 
-
-bst <- modelxgboost
-
-bst <-xgboost(data = sparse_matrix.train, label = train.label,  objective = "reg:linear",,  eval_metric="rmse",
-              nrounds = 200, max_depth = 3, eta = 0.1, gamma = 0, colsample_bytree = 9 , min_child_weight = 4, subsample = 0.75 )
-
-bst <-xgboost(data = sparse_matrix.train, label = train.label,  objective = "reg:linear", eval_metric="rmse",
-              nrounds = 200, max_depth = 6, eta = 0.1, gamma = 0)
-
-#, colsample_bytree = 9 , min_child_weight = 4, subsample = 0.75 )
-
-
-saveRDS(bst,  "parking.xgboost.Model.RDS")
-
-#Predict
-test.bst <- test
-test.bst$prediction <- predict(bst, sparse_matrix.test)
-test.bst$prediction
-
-validation.bst <- validation
-validation.bst$prediction <- predict(bst, sparse_matrix.validation)
-validation.bst$prediction
-
-
